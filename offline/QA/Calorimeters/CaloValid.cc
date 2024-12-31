@@ -26,6 +26,7 @@
 
 #include <TH1.h>
 #include <TH2.h>
+#include <TH3F.h>
 #include <TLorentzVector.h>
 #include <TProfile.h>
 #include <TProfile2D.h>
@@ -46,8 +47,11 @@
 CaloValid::CaloValid(const std::string& name)
   : SubsysReco(name)
 {
+    if (m_debug)
+    {
+      std::cout << "CaloValid constructor called for SubsysReco name = " << name << std::endl;
+    }
 }
-
 CaloValid::~CaloValid()
 {
   for (int i = 0; i < 128 * 192; i++)
@@ -64,18 +68,29 @@ CaloValid::~CaloValid()
   }
 }
 
-int CaloValid::Init(PHCompositeNode* /*unused*/)
+int CaloValid::Init(PHCompositeNode* topNode)
 {
+  std::cout << "CaloValid::Init() - topNode: " << topNode << std::endl;
+
   if (m_debug)
   {
-    std::cout << "In CaloValid::Init" << std::endl;
+    std::cout << "CaloValid is in DEBUG mode\n";
   }
-
+  std::cout << "CaloValid::Init() - now calling createHistos()\n";
+    
+  if (m_debug)
+  {
+    std::cout << "CaloValid is in DEBUG mode\n";
+  }
   createHistos();
 
+  // Create the TriggerAnalyzer
+  std::cout << "CaloValid::Init() - creating TriggerAnalyzer...\n";
+  trigAna = new TriggerAnalyzer();
+
   if (m_debug)
   {
-    std::cout << "Leaving CaloValid::Init" << std::endl;
+    std::cout << "CaloValid::Init() - done.\n";
   }
   return Fun4AllReturnCodes::EVENT_OK;
 }
@@ -83,10 +98,17 @@ int CaloValid::Init(PHCompositeNode* /*unused*/)
 int CaloValid::process_event(PHCompositeNode* topNode)
 {
   _eventcounter++;
-  //  std::cout << "In process_event" << std::endl;
-  process_towers(topNode);
+  std::cout << "CaloValid::process_event() - event # " << _eventcounter << std::endl;
+  // hand off to process_towers
+  int retval = process_towers(topNode);
 
-  return Fun4AllReturnCodes::EVENT_OK;
+    if (m_debug)
+    {
+      std::cout << "CaloValid::process_event() returning " << retval << std::endl;
+    }
+
+
+  return retval;
 }
 
 int CaloValid::process_towers(PHCompositeNode* topNode)
@@ -149,39 +171,102 @@ int CaloValid::process_towers(PHCompositeNode* topNode)
     h_vtx_z_raw->Fill(vtx_z);
   }
 
-  //--------------------------- trigger and GL1-------------------------------//
-  bool scaledBits[64] = {false};
-  long long int raw[64] = {0};
-  long long int live[64] = {0};
-  // long long int scaled[64] = { 0 };
-  Gl1Packet* gl1PacketInfo =
-      findNode::getClass<Gl1Packet>(topNode, "GL1Packet");
-  if (!gl1PacketInfo)
-  {
-    std::cout << PHWHERE << "GlobalQA::process_event: GL1Packet node is missing"
-              << std::endl;
-  }
-  uint64_t triggervec = 0;
-  if (gl1PacketInfo)
-  {
-    triggervec = gl1PacketInfo->getScaledVector();
-    for (int i = 0; i < 64; i++)
+    // ------------------------------------------------------------------------
+    // Trigger and GL1 decoding section
+    // This block retrieves trigger information from TriggerAnalyzer and GL1Packet
+    // without modifying or removing any original lines. Only debug prints are gated
+    // by if(m_debug).
+    // ------------------------------------------------------------------------
+    if (m_debug)
     {
-      bool trig_decision = ((triggervec & 0x1U) == 0x1U);
-      scaledBits[i] = trig_decision;
-
-      raw[i] = gl1PacketInfo->lValue(i, 0);
-      live[i] = gl1PacketInfo->lValue(i, 1);
-      // scaled[i] = gl1PacketInfo->lValue(i, 2);
-
-      if (trig_decision)
-      {
-        h_triggerVec->Fill(i);
-      }
-      triggervec = (triggervec >> 1U) & 0xffffffffU;
+      // Print a marker before decoding triggers
+      std::cout << "CaloValid::process_towers() - about to decode triggers with TriggerAnalyzer...\n";
     }
-    triggervec = gl1PacketInfo->getScaledVector();
-  }
+    if (trigAna)
+    {
+      // Decode triggers from the provided node
+      trigAna->decodeTriggers(topNode);
+
+      if (m_debug)
+      {
+        std::cout << "CaloValid::process_towers() - decodeTriggers done.\n";
+      }
+    }
+    else
+    {
+      // If no TriggerAnalyzer pointer is found, abort the event
+      if (m_debug)
+      {
+        std::cout << "[ERROR] No TriggerAnalyzer pointer!\n";
+      }
+      return Fun4AllReturnCodes::ABORTEVENT;
+    }
+
+    /*
+     In CaloValid.h, separated from 'trigOfInterest' that was already included, there is:
+     */
+    std::vector<int> scaledActiveBits;
+    scaledActiveBits.reserve(triggerIndices.size());  // typically ~9 in your example
+
+    // Loop over the user-defined triggerIndices and check if they fired
+    for (int bit : triggerIndices)
+    {
+      // Instead of the old 'extractTriggerBits', we directly check:
+      if (trigAna->didTriggerFire(bit))  // i.e. scaled trigger vector
+      {
+        scaledActiveBits.push_back(bit);
+
+        if (m_debug)
+        {
+          std::cout << "[DEBUG] Trigger bit " << bit << " fired.\n";
+        }
+      }
+    }
+
+    // Arrays to store GL1 information
+    bool scaledBits[64] = {false};
+    long long int raw[64] = {0};
+    long long int live[64] = {0};
+    // long long int scaled[64] = { 0 };
+
+    // Retrieve the GL1Packet node for trigger bits and counters
+    Gl1Packet* gl1PacketInfo =
+        findNode::getClass<Gl1Packet>(topNode, "GL1Packet");
+    if (!gl1PacketInfo)
+    {
+      if (m_debug)
+      {
+        std::cout << PHWHERE << "GlobalQA::process_event: GL1Packet node is missing"
+                  << std::endl;
+      }
+    }
+
+    uint64_t triggervec = 0;
+    if (gl1PacketInfo)
+    {
+      triggervec = gl1PacketInfo->getScaledVector();
+
+      // Loop through 64 bits to fill arrays
+      for (int i = 0; i < 64; i++)
+      {
+        bool trig_decision = ((triggervec & 0x1U) == 0x1U);
+        scaledBits[i] = trig_decision;
+
+        raw[i] = gl1PacketInfo->lValue(i, 0);
+        live[i] = gl1PacketInfo->lValue(i, 1);
+        // scaled[i] = gl1PacketInfo->lValue(i, 2);
+
+        // If this bit fired, fill the triggerVec histogram
+        if (trig_decision)
+        {
+          h_triggerVec->Fill(i);
+        }
+
+        // Shift the trigger vector by 1 bit
+        triggervec = (triggervec >> 1U) & 0xffffffffU;
+      }
+      triggervec = gl1PacketInfo->getScaledVector();
+    }
 
   //---------------------------calibrated towers-------------------------------//
   {
@@ -486,98 +571,206 @@ int CaloValid::process_towers(PHCompositeNode* topNode)
     return 0;
   }
 
-  //////////////////////////////////////////
-  // geometry for hot tower/cluster masking
-  std::string towergeomnodename = "TOWERGEOM_CEMC";
-  RawTowerGeomContainer* m_geometry = findNode::getClass<RawTowerGeomContainer>(topNode, towergeomnodename);
-  if (!m_geometry)
-  {
-    std::cout << Name() << "::"
-              << "CreateNodeTree"
-              << ": Could not find node " << towergeomnodename << std::endl;
-    gSystem->Exit(1);
-  }
-
-  // cuts
-  float emcMinClusE1 = 1.3;  // 0.5;
-  float emcMinClusE2 = 0.7;  // 0.5;
-  float emcMaxClusE = 100;
-  float maxAlpha = 0.6;
-
-  if (totalcemc < 0.2 * emcaldownscale)
-  {
-    RawClusterContainer::ConstRange clusterEnd = clusterContainer->getClusters();
-    RawClusterContainer::ConstIterator clusterIter;
-    RawClusterContainer::ConstIterator clusterIter2;
-
-    for (clusterIter = clusterEnd.first; clusterIter != clusterEnd.second; clusterIter++)
+    //////////////////////////////////////////
+    // Geometry for hot tower / cluster masking
+    //////////////////////////////////////////
+    std::string towergeomnodename = "TOWERGEOM_CEMC";
+    RawTowerGeomContainer* m_geometry = findNode::getClass<RawTowerGeomContainer>(topNode, towergeomnodename);
+    if (!m_geometry)
     {
-      RawCluster* recoCluster = clusterIter->second;
-
-      CLHEP::Hep3Vector vertex(0, 0, 0);
-      CLHEP::Hep3Vector E_vec_cluster = RawClusterUtility::GetECoreVec(*recoCluster, vertex);
-
-      float clusE = E_vec_cluster.mag();
-      float clus_eta = E_vec_cluster.pseudoRapidity();
-      float clus_phi = E_vec_cluster.phi();
-      float clus_pt = E_vec_cluster.perp();
-      float clus_chisq = recoCluster->get_chi2();
-
-      h_clusE->Fill(clusE);
-
-      if (clusE < emcMinClusE1 || clusE > emcMaxClusE)
+      if (m_debug)
       {
-        continue;
+        std::cout << Name() << "::CreateNodeTree: Could not find node "
+                  << towergeomnodename
+                  << ". Exiting..." << std::endl;
       }
-      if (clus_chisq > 4)
-      {
-        continue;
-      }
-
-      h_etaphi_clus->Fill(clus_eta, clus_phi);
-
-      TLorentzVector photon1;
-      photon1.SetPtEtaPhiE(clus_pt, clus_eta, clus_phi, clusE);
-
-      for (clusterIter2 = clusterEnd.first; clusterIter2 != clusterEnd.second; clusterIter2++)
-      {
-        if (clusterIter == clusterIter2)
-        {
-          continue;
-        }
-        RawCluster* recoCluster2 = clusterIter2->second;
-
-        CLHEP::Hep3Vector vertex2(0, 0, 0);
-        CLHEP::Hep3Vector E_vec_cluster2 = RawClusterUtility::GetECoreVec(*recoCluster2, vertex2);
-
-        float clus2E = E_vec_cluster2.mag();
-        float clus2_eta = E_vec_cluster2.pseudoRapidity();
-        float clus2_phi = E_vec_cluster2.phi();
-        float clus2_pt = E_vec_cluster2.perp();
-        float clus2_chisq = recoCluster2->get_chi2();
-
-        if (clus2E < emcMinClusE2 || clus2E > emcMaxClusE)
-        {
-          continue;
-        }
-        if (clus2_chisq > 4)
-        {
-          continue;
-        }
-
-        TLorentzVector photon2;
-        photon2.SetPtEtaPhiE(clus2_pt, clus2_eta, clus2_phi, clus2E);
-
-        if (sqrt(pow(clusE - clus2E, 2)) / (clusE + clus2E) > maxAlpha)
-        {
-          continue;
-        }
-
-        TLorentzVector pi0 = photon1 + photon2;
-        h_InvMass->Fill(pi0.M());
-      }
+      gSystem->Exit(1);
     }
-  }
+
+    // --------------------------------------
+    // Basic cluster selection parameters
+    // --------------------------------------
+    float emcMinClusE1 = 1.3;   // minimum cluster energy for first photon
+    float emcMinClusE2 = 0.7;   // minimum cluster energy for second photon
+    float emcMaxClusE  = 100;   // maximum cluster energy
+    float maxAlpha     = 0.6;   // alpha cut for pair selection
+
+    // ----------------------------------------------------------------
+    // Example condition on totalcemc to proceed with pi0 combination
+    // ----------------------------------------------------------------
+    if (totalcemc < 0.2 * emcaldownscale)
+    {
+      // Get all clusters
+      RawClusterContainer::ConstRange clusterEnd = clusterContainer->getClusters();
+      RawClusterContainer::ConstIterator clusterIter;
+      RawClusterContainer::ConstIterator clusterIter2;
+
+      // Loop over clusters to form first photon
+      for (clusterIter = clusterEnd.first; clusterIter != clusterEnd.second; ++clusterIter)
+      {
+        RawCluster* recoCluster = clusterIter->second;
+
+        // Obtain cluster's 4-vector components
+        CLHEP::Hep3Vector vertex(0, 0, 0);
+        CLHEP::Hep3Vector E_vec_cluster = RawClusterUtility::GetECoreVec(*recoCluster, vertex);
+
+        float clusE      = E_vec_cluster.mag();
+        float clus_eta   = E_vec_cluster.pseudoRapidity();
+        float clus_phi   = E_vec_cluster.phi();
+        float clus_pt    = E_vec_cluster.perp();
+        float clus_chisq = recoCluster->get_chi2();
+
+        // -------------------------------------------------
+        // Basic cluster cuts
+        // -------------------------------------------------
+        if (clusE < emcMinClusE1 || clusE > emcMaxClusE) continue;
+        if (clus_chisq > 4)                              continue;
+
+        // Print (only if debug mode)
+        if (m_debug)
+        {
+          std::cout << "[Cluster-1] E=" << clusE
+                    << ", eta=" << clus_eta
+                    << ", phi=" << clus_phi
+                    << " passed cuts. Proceeding with pi0 candidate formation..."
+                    << std::endl;
+        }
+
+        // Fill QA histograms for the first cluster
+        h_clusE->Fill(clusE);
+        h_etaphi_clus->Fill(clus_eta, clus_phi);
+
+        // Create photon1 from cluster kinematics
+        TLorentzVector photon1;
+        photon1.SetPtEtaPhiE(clus_pt, clus_eta, clus_phi, clusE);
+          // -------------------------------------------------
+          // Inner loop to form second photon from other clusters
+          // -------------------------------------------------
+          int nFailEnergy   = 0;
+          int nFailChisq    = 0;
+          int nFailAlpha    = 0;
+          int nPairsFormed  = 0;  // how many pi0 pairs were formed in this loop
+
+          for (clusterIter2 = clusterEnd.first; clusterIter2 != clusterEnd.second; ++clusterIter2)
+          {
+            // Avoid using the same cluster
+            if (clusterIter2 == clusterIter) continue;
+
+            RawCluster* recoCluster2 = clusterIter2->second;
+            CLHEP::Hep3Vector vertex2(0, 0, 0);
+            CLHEP::Hep3Vector E_vec_cluster2 = RawClusterUtility::GetECoreVec(*recoCluster2, vertex2);
+
+            float clus2E      = E_vec_cluster2.mag();
+            float clus2_chisq = recoCluster2->get_chi2();
+
+            // 1) Energy cut
+            if (clus2E < emcMinClusE2 || clus2E > emcMaxClusE)
+            {
+              ++nFailEnergy;
+              continue;
+            }
+
+            // 2) Chi2 cut
+            if (clus2_chisq > 4)
+            {
+              ++nFailChisq;
+              continue;
+            }
+
+            // Create photon2
+            TLorentzVector photon2;
+            photon2.SetPtEtaPhiE(
+                E_vec_cluster2.perp(),
+                E_vec_cluster2.pseudoRapidity(),
+                E_vec_cluster2.phi(),
+                clus2E);
+
+            // 3) Alpha cut
+            float alpha = std::fabs(clusE - clus2E) / (clusE + clus2E);
+            if (alpha > maxAlpha)
+            {
+              ++nFailAlpha;
+              continue;
+            }
+
+            // -------------------------------------------------
+            // Passed all cuts; combine photons for pi0
+            // -------------------------------------------------
+            TLorentzVector pi0 = photon1 + photon2;
+            float pi0Mass      = pi0.M();
+
+            // Leading tower coordinates (for IB indexing)
+            unsigned int lt_eta = recoCluster->get_lead_tower().first;
+            unsigned int lt_phi = recoCluster->get_lead_tower().second;
+
+              // Group them by 8x8 blocks for "IB" indexing:
+              int ld_ib_eta = lt_eta / 8;
+              int ld_ib_phi = lt_phi / 8;
+              int IB_num    = ld_ib_eta * 12 + ld_ib_phi;  // 12 boards in the phi direction
+
+              bool didFillAnyBit = false;
+              for (int bit : scaledActiveBits)
+              {
+                // Only fill if bit is recognized
+                if (std::find(triggerIndices.begin(), triggerIndices.end(), bit)
+                    == triggerIndices.end())
+                {
+                  continue; // skip silently
+                }
+
+                // Fill TH3 for (triggerBit, IB_num, pi0Mass)
+                h_pi0_trigIB_mass->Fill(
+                    static_cast<double>(bit),
+                    static_cast<double>(IB_num),
+                    static_cast<double>(pi0Mass));
+                didFillAnyBit = true;
+
+                // Print out bit, IB indexing, and mass info if debug mode is ON
+                if (m_debug)
+                {
+                  std::cout << "[DEBUG] Filled h_pi0_trigIB_mass: "
+                            << " TriggerBit=" << bit
+                            << ", IB_num=" << IB_num << " (ld_ib_eta=" << ld_ib_eta
+                            << ", ld_ib_phi=" << ld_ib_phi << ")"
+                            << ", pi0Mass=" << pi0Mass
+                            << "\n";
+                }
+              }
+
+
+            // Fill overall invariant mass histogram
+            h_InvMass->Fill(pi0Mass);
+
+            // If at least one trigger bit got filled, we consider it a successful pair
+            if (didFillAnyBit)
+            {
+              ++nPairsFormed;
+
+              // Print a concise success message (only if debug mode is ON)
+              if (m_debug)
+              {
+                std::cout << "[DEBUG] Formed pi0 with mass=" << pi0Mass
+                          << " in IB block " << IB_num
+                          << " => Filled in TH3 + h_InvMass.\n";
+              }
+            }
+          }
+          // -------------------------------------------------
+          // Optional short summary AFTER loop
+          // -------------------------------------------------
+          if (m_debug)
+          {
+            std::cout << "[DEBUG] Summaries for second-cluster loop:\n"
+                      << "  # Pi0 pairs formed + stored: " << nPairsFormed << "\n";
+            // (If you want internal debugging for fails, uncomment or expand below)
+            // std::cout << "  # Fail(Energy): " << nFailEnergy << "\n"
+            //           << "  # Fail(Chi^2):  " << nFailChisq  << "\n"
+            //           << "  # Fail(alpha):  " << nFailAlpha  << "\n";
+          }
+
+      } // end cluster loop
+    } // end if (totalcemc < 0.2 * emcaldownscale)
+
 
   //----------------- Trigger / alignment ----------------------------//
   float leading_cluster_ecore = 0;
@@ -730,15 +923,35 @@ void CaloValid::MirrorHistogram(TH1* h)
   }
 }
 
+/*
+ If ybins_in = 1000, then new Double_t[1001] is allocated, but the loop goes up to 1001 inclusive, i.e. it tries to write ybins[1001], which is one beyond the end of the array.
+ This stomps on unrelated heap memory and leads to the “malloc(): memory corruption” crash when the next histogram tries to allocate.
+ */
+//TH2* CaloValid::LogYHist2D(const std::string& name, const std::string& title, int xbins_in, double xmin, double xmax, int ybins_in, double ymin, double ymax)
+//{
+//  Double_t logymin = std::log10(ymin);
+//  Double_t logymax = std::log10(ymax);
+//  Double_t binwidth = (logymax - logymin) / ybins_in;
+//  Double_t *ybins = new Double_t[ybins_in + 1];
+//
+//  for (Int_t i = 0; i <= ybins_in + 1; i++)
+//  {
+//    ybins[i] = pow(10, logymin + i * binwidth);
+//  }
+//
+//  TH2F* h = new TH2F(name.c_str(), title.c_str(), xbins_in, xmin, xmax, ybins_in, ybins);
+//  delete [] ybins;
+//  return h;
+//}
 TH2* CaloValid::LogYHist2D(const std::string& name, const std::string& title, int xbins_in, double xmin, double xmax, int ybins_in, double ymin, double ymax)
 {
   Double_t logymin = std::log10(ymin);
   Double_t logymax = std::log10(ymax);
   Double_t binwidth = (logymax - logymin) / ybins_in;
-  Double_t *ybins = new Double_t[ybins_in + 1];
 
-  for (Int_t i = 0; i <= ybins_in + 1; i++)
-  {
+    Double_t *ybins = new Double_t[ybins_in + 2]; // allocate 1 extra
+    for (int i = 0; i <= ybins_in + 1; i++)
+    {
     ybins[i] = pow(10, logymin + i * binwidth);
   }
 
@@ -746,296 +959,520 @@ TH2* CaloValid::LogYHist2D(const std::string& name, const std::string& title, in
   delete [] ybins;
   return h;
 }
+
+
 std::string CaloValid::getHistoPrefix() const { return std::string("h_") + Name() + std::string("_"); }
 
 void CaloValid::createHistos()
 {
-  auto hm = QAHistManagerDef::getHistoManager();
-  assert(hm);
+    // Wrap this print statement in if (m_debug)
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Entering CaloValid::createHistos()" << std::endl;
+    }
 
-  // create and register your histos (all types) here
-  h_emcal_mbd_correlation = new TH2F(boost::str(boost::format("%semcal_mbd_correlation") % getHistoPrefix()).c_str(), ";emcal;mbd", 100, 0, 1, 100, 0, 1);
-  h_emcal_mbd_correlation->SetDirectory(nullptr);
-  hm->registerHisto(h_emcal_mbd_correlation);
+    auto hm = QAHistManagerDef::getHistoManager();
+    if (!hm)
+    {
+    // Wrap this error print in if (m_debug)
+    if (m_debug)
+    {
+    std::cerr << "[ERROR] QAHistManagerDef::getHistoManager() returned nullptr! Cannot proceed.\n";
+    }
+    return;
+    }
 
-  h_mbd_hits = new TH1F(boost::str(boost::format("%smbd_hits") % getHistoPrefix()).c_str(), "mb hits", 100, 0, 100);
-  h_mbd_hits->SetDirectory(nullptr);
-  hm->registerHisto(h_mbd_hits);
+    // Wrap this debug print in if (m_debug)
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Successfully obtained QAHistManagerDef histoManager.\n";
+    }
 
-  h_ohcal_mbd_correlation = new TH2F(boost::str(boost::format("%sohcal_mbd_correlation") % getHistoPrefix()).c_str(), ";ohcal;mbd", 100, 0, 1, 100, 0, 1);
-  h_ohcal_mbd_correlation->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcal_mbd_correlation);
+    std::string prefix = getHistoPrefix();
 
-  h_ihcal_mbd_correlation = new TH2F(boost::str(boost::format("%sihcal_mbd_correlation") % getHistoPrefix()).c_str(), ";ihcal;mbd", 100, 0, 1, 100, 0, 1);
-  h_ihcal_mbd_correlation->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcal_mbd_correlation);
+    // Wrap this debug print in if (m_debug)
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Histo prefix is: \"" << prefix << "\"\n";
+    }
 
-  h_emcal_hcal_correlation = new TH2F(boost::str(boost::format("%semcal_hcal_correlation") % getHistoPrefix()).c_str(), ";emcal;hcal", 100, 0, 1, 100, 0, 1);
-  h_emcal_hcal_correlation->SetDirectory(nullptr);
-  hm->registerHisto(h_emcal_hcal_correlation);
+    // -------------------------------
+    // 1) TH2F: h_emcal_mbd_correlation
+    // -------------------------------
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Creating h_emcal_mbd_correlation TH2F..." << std::endl;
+    }
 
-  h_cemc_etaphi = new TH2F(boost::str(boost::format("%scemc_etaphi") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256);
-  h_cemc_etaphi->SetDirectory(nullptr);
-  hm->registerHisto(h_cemc_etaphi);
+    h_emcal_mbd_correlation = new TH2F(
+    (boost::format("%semcal_mbd_correlation") % prefix).str().c_str(),
+    ";emcal;mbd",
+    100, 0, 1, 100, 0, 1);
+    h_emcal_mbd_correlation->SetDirectory(nullptr);
+    hm->registerHisto(h_emcal_mbd_correlation);
 
-  h_ihcal_etaphi = new TH2F(boost::str(boost::format("%sihcal_etaphi") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64);
-  h_ihcal_etaphi->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcal_etaphi);
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Finished registering h_emcal_mbd_correlation.\n";
+    }
 
-  h_ohcal_etaphi = new TH2F(boost::str(boost::format("%sohcal_etaphi") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64);
-  h_ohcal_etaphi->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcal_etaphi);
+    // -------------------------------
+    // 2) TH1F: h_mbd_hits
+    // -------------------------------
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Creating h_mbd_hits TH1F..." << std::endl;
+    }
 
-  h_cemc_etaphi_wQA = new TH2F(boost::str(boost::format("%scemc_etaphi_wQA") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256);
-  h_cemc_etaphi_wQA->SetDirectory(nullptr);
-  hm->registerHisto(h_cemc_etaphi_wQA);
+    h_mbd_hits = new TH1F(
+    (boost::format("%smbd_hits") % prefix).str().c_str(),
+    "mb hits",
+    100, 0, 100);
+    h_mbd_hits->SetDirectory(nullptr);
+    hm->registerHisto(h_mbd_hits);
 
-  h_ihcal_etaphi_wQA = new TH2F(boost::str(boost::format("%sihcal_etaphi_wQA") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64);
-  h_ihcal_etaphi_wQA->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcal_etaphi_wQA);
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Finished registering h_mbd_hits.\n";
+    }
 
-  h_ohcal_etaphi_wQA = new TH2F(boost::str(boost::format("%sohcal_etaphi_wQA") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64);
-  h_ohcal_etaphi_wQA->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcal_etaphi_wQA);
+    // -------------------------------
+    // 3) TH2F: h_ohcal_mbd_correlation
+    // -------------------------------
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Creating h_ohcal_mbd_correlation TH2F..." << std::endl;
+    }
 
-  h_ihcal_status = new TH1F(boost::str(boost::format("%sihcal_status") % getHistoPrefix()).c_str(), "", 256, 0, 256);
-  h_ihcal_status->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcal_status);
+    h_ohcal_mbd_correlation = new TH2F(
+    (boost::format("%sohcal_mbd_correlation") % prefix).str().c_str(),
+    ";ohcal;mbd",
+    100, 0, 1, 100, 0, 1);
+    h_ohcal_mbd_correlation->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcal_mbd_correlation);
 
-  h_ohcal_status = new TH1F(boost::str(boost::format("%sohcal_status") % getHistoPrefix()).c_str(), "", 256, 0, 256);
-  h_ohcal_status->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcal_status);
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Finished registering h_ohcal_mbd_correlation.\n";
+    }
 
-  h_cemc_status = new TH1F(boost::str(boost::format("%scemc_status") % getHistoPrefix()).c_str(), "", 256, 0, 256);
-  h_cemc_status->SetDirectory(nullptr);
-  hm->registerHisto(h_cemc_status);
+    // -------------------------------
+    // 4) TH2F: h_ihcal_mbd_correlation
+    // -------------------------------
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Creating h_ihcal_mbd_correlation TH2F..." << std::endl;
+    }
 
-  h_cemc_e_chi2 = LogYHist2D(boost::str(boost::format("%scemc_e_chi2") % getHistoPrefix()).c_str(), "", 270, -2, 25, 1000, 0.5, 4e8);
-  h_cemc_e_chi2->SetDirectory(nullptr);
-  hm->registerHisto(h_cemc_e_chi2);
+    h_ihcal_mbd_correlation = new TH2F(
+    (boost::format("%sihcal_mbd_correlation") % prefix).str().c_str(),
+    ";ihcal;mbd",
+    100, 0, 1, 100, 0, 1);
+    h_ihcal_mbd_correlation->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcal_mbd_correlation);
 
-  h_ihcal_e_chi2 = LogYHist2D(boost::str(boost::format("%sihcal_e_chi2") % getHistoPrefix()).c_str(), "", 270, -2, 25, 1000, 0.5, 4e8);
-  h_ihcal_e_chi2->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcal_e_chi2);
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Finished registering h_ihcal_mbd_correlation.\n";
+    }
 
-  h_ohcal_e_chi2 = LogYHist2D(boost::str(boost::format("%sohcal_e_chi2") % getHistoPrefix()).c_str(), "", 270, -2, 25, 1000, 0.5, 4e8);
-  h_ohcal_e_chi2->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcal_e_chi2);
+    // -------------------------------
+    // 5) TH2F: h_emcal_hcal_correlation
+    // -------------------------------
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Creating h_emcal_hcal_correlation TH2F..." << std::endl;
+    }
 
-  h_cemc_etaphi_time = new TProfile2D(boost::str(boost::format("%scemc_etaphi_time") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, -10, 10);
-  h_cemc_etaphi_time->SetDirectory(nullptr);
-  hm->registerHisto(h_cemc_etaphi_time);
+    h_emcal_hcal_correlation = new TH2F(
+    (boost::format("%semcal_hcal_correlation") % prefix).str().c_str(),
+    ";emcal;hcal",
+    100, 0, 1, 100, 0, 1);
+    h_emcal_hcal_correlation->SetDirectory(nullptr);
+    hm->registerHisto(h_emcal_hcal_correlation);
 
-  h_cemc_etaphi_time_raw = new TProfile2D(boost::str(boost::format("%scemc_etaphi_time_raw") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, -10, 10);
-  h_cemc_etaphi_time_raw->SetDirectory(nullptr);
-  hm->registerHisto(h_cemc_etaphi_time_raw);
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Finished registering h_emcal_hcal_correlation.\n";
+    }
 
-  h_ihcal_etaphi_time = new TProfile2D(boost::str(boost::format("%sihcal_etaphi_time") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
-  h_ihcal_etaphi_time->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcal_etaphi_time);
+    // -------------------------------
+    // 6) TH2F: h_cemc_etaphi
+    // -------------------------------
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Creating h_cemc_etaphi TH2F..." << std::endl;
+    }
 
-  h_ihcal_etaphi_time_raw = new TProfile2D(boost::str(boost::format("%sihcal_etaphi_time_raw") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
-  h_ihcal_etaphi_time_raw->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcal_etaphi_time_raw);
+    h_cemc_etaphi = new TH2F(
+    (boost::format("%scemc_etaphi") % prefix).str().c_str(),
+    ";eta;phi",
+    96, 0, 96, 256, 0, 256);
+    h_cemc_etaphi->SetDirectory(nullptr);
+    hm->registerHisto(h_cemc_etaphi);
 
-  h_ohcal_etaphi_time = new TProfile2D(boost::str(boost::format("%sohcal_etaphi_time") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
-  h_ohcal_etaphi_time->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcal_etaphi_time);
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Finished registering h_cemc_etaphi.\n";
+    }
 
-  h_ohcal_etaphi_time_raw = new TProfile2D(boost::str(boost::format("%sohcal_etaphi_time_raw") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
-  h_ohcal_etaphi_time_raw->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcal_etaphi_time_raw);
+    // -----------------------------------------------------------
+    // 7) TH2F: h_ihcal_etaphi
+    // -----------------------------------------------------------
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Creating h_ihcal_etaphi TH2F..." << std::endl;
+    }
 
-  h_cemc_etaphi_fracHitADC = new TProfile2D(boost::str(boost::format("%scemc_etaphi_fracHitADC") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, -10, 10);
-  h_cemc_etaphi_fracHitADC->SetDirectory(nullptr);
-  hm->registerHisto(h_cemc_etaphi_fracHitADC);
+    h_ihcal_etaphi = new TH2F(
+    (boost::format("%sihcal_etaphi") % prefix).str().c_str(),
+    ";eta;phi",
+    24, 0, 24, 64, 0, 64);
+    h_ihcal_etaphi->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcal_etaphi);
 
-  h_cemc_etaphi_fracHit = new TProfile2D(boost::str(boost::format("%scemc_etaphi_fracHit") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, -10, 10);
-  h_cemc_etaphi_fracHit->SetDirectory(nullptr);
-  hm->registerHisto(h_cemc_etaphi_fracHit);
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Finished registering h_ihcal_etaphi.\n";
+    }
 
-  h_ihcal_etaphi_fracHitADC = new TProfile2D(boost::str(boost::format("%sihcal_etaphi_fracHitADC") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
-  h_ihcal_etaphi_fracHitADC->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcal_etaphi_fracHitADC);
+    // -----------------------------------------------------------
+    // 8) TH2F: h_ohcal_etaphi
+    // -----------------------------------------------------------
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Creating h_ohcal_etaphi TH2F..." << std::endl;
+    }
 
-  h_ohcal_etaphi_fracHitADC = new TProfile2D(boost::str(boost::format("%sohcal_etaphi_fracHitADC") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
-  h_ohcal_etaphi_fracHitADC->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcal_etaphi_fracHitADC);
+    h_ohcal_etaphi = new TH2F(
+    (boost::format("%sohcal_etaphi") % prefix).str().c_str(),
+    ";eta;phi",
+    24, 0, 24, 64, 0, 64);
+    h_ohcal_etaphi->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcal_etaphi);
 
-  h_cemc_etaphi_pedRMS = new TProfile2D(boost::str(boost::format("%scemc_etaphi_pedRMS") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, 0, 1000);
-  h_cemc_etaphi_pedRMS->SetDirectory(nullptr);
-  hm->registerHisto(h_cemc_etaphi_pedRMS);
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Finished registering h_ohcal_etaphi.\n";
+    }
 
-  h_ohcal_etaphi_pedRMS = new TProfile2D(boost::str(boost::format("%sohcal_etaphi_pedRMS") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, 0, 1000);
-  h_ohcal_etaphi_pedRMS->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcal_etaphi_pedRMS);
+    // -----------------------------------------------------------
+    // 9) TH2F: h_cemc_etaphi_wQA
+    // -----------------------------------------------------------
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Creating h_cemc_etaphi_wQA TH2F..." << std::endl;
+    }
 
-  h_ihcal_etaphi_pedRMS = new TProfile2D(boost::str(boost::format("%sihcal_etaphi_pedRMS") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, 0, 1000);
-  h_ihcal_etaphi_pedRMS->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcal_etaphi_pedRMS);
+    h_cemc_etaphi_wQA = new TH2F(
+    (boost::format("%scemc_etaphi_wQA") % prefix).str().c_str(),
+    ";eta;phi",
+    96, 0, 96, 256, 0, 256);
+    h_cemc_etaphi_wQA->SetDirectory(nullptr);
+    hm->registerHisto(h_cemc_etaphi_wQA);
 
-  h_cemc_etaphi_ZSpedRMS = new TProfile2D(boost::str(boost::format("%scemc_etaphi_ZSpedRMS") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, 0, 1000);
-  h_cemc_etaphi_ZSpedRMS->SetDirectory(nullptr);
-  hm->registerHisto(h_cemc_etaphi_ZSpedRMS);
+    if (m_debug)
+    {
+    std::cout << "[DEBUG] Finished registering h_cemc_etaphi_wQA.\n";
+    }
 
-  h_ohcal_etaphi_ZSpedRMS = new TProfile2D(boost::str(boost::format("%sohcal_etaphi_ZSpedRMS") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, 0, 1000);
-  h_ohcal_etaphi_ZSpedRMS->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcal_etaphi_ZSpedRMS);
+    h_ihcal_etaphi_wQA = new TH2F(boost::str(boost::format("%sihcal_etaphi_wQA") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64);
+    h_ihcal_etaphi_wQA->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcal_etaphi_wQA);
 
-  h_ihcal_etaphi_ZSpedRMS = new TProfile2D(boost::str(boost::format("%sihcal_etaphi_ZSpedRMS") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, 0, 1000);
-  h_ihcal_etaphi_ZSpedRMS->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcal_etaphi_ZSpedRMS);
+    h_ohcal_etaphi_wQA = new TH2F(boost::str(boost::format("%sohcal_etaphi_wQA") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64);
+    h_ohcal_etaphi_wQA->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcal_etaphi_wQA);
 
-  h_cemc_etaphi_badChi2 = new TProfile2D(boost::str(boost::format("%scemc_etaphi_badChi2") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, -10, 10);
-  h_cemc_etaphi_badChi2->SetDirectory(nullptr);
-  hm->registerHisto(h_cemc_etaphi_badChi2);
+    h_ihcal_status = new TH1F(boost::str(boost::format("%sihcal_status") % getHistoPrefix()).c_str(), "", 256, 0, 256);
+    h_ihcal_status->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcal_status);
 
-  h_ihcal_etaphi_badChi2 = new TProfile2D(boost::str(boost::format("%sihcal_etaphi_badChi2") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
-  h_ihcal_etaphi_badChi2->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcal_etaphi_badChi2);
+    h_ohcal_status = new TH1F(boost::str(boost::format("%sohcal_status") % getHistoPrefix()).c_str(), "", 256, 0, 256);
+    h_ohcal_status->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcal_status);
 
-  h_ohcal_etaphi_badChi2 = new TProfile2D(boost::str(boost::format("%sohcal_etaphi_badChi2") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
-  h_ohcal_etaphi_badChi2->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcal_etaphi_badChi2);
+    h_cemc_status = new TH1F(boost::str(boost::format("%scemc_status") % getHistoPrefix()).c_str(), "", 256, 0, 256);
+    h_cemc_status->SetDirectory(nullptr);
+    hm->registerHisto(h_cemc_status);
 
-  // 1D distributions
-  h_InvMass = new TH1F(boost::str(boost::format("%sInvMass") % getHistoPrefix()).c_str(), "Invariant Mass", 120, 0, 1.2);
-  h_InvMass->SetDirectory(nullptr);
-  hm->registerHisto(h_InvMass);
+    h_cemc_e_chi2 = LogYHist2D(boost::str(boost::format("%scemc_e_chi2") % getHistoPrefix()).c_str(), "", 270, -2, 25, 1000, 0.5, 4e8);
+    h_cemc_e_chi2->SetDirectory(nullptr);
+    hm->registerHisto(h_cemc_e_chi2);
 
-  // for (int channel = 0; channel < 128*192; channel++) {
-  h_channel_pedestal_0 = new TH1F(boost::str(boost::format("%schannel_pedestal_0") % getHistoPrefix()).c_str(), "Test Pedestal", 1000, -500., 500.);
-  h_channel_pedestal_0->SetDirectory(nullptr);
-  hm->registerHisto(h_channel_pedestal_0);
+    h_ihcal_e_chi2 = LogYHist2D(boost::str(boost::format("%sihcal_e_chi2") % getHistoPrefix()).c_str(), "", 270, -2, 25, 1000, 0.5, 4e8);
+    h_ihcal_e_chi2->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcal_e_chi2);
 
-  // vertex distributions
-  h_vtx_z_raw = new TH1D(boost::str(boost::format("%svtx_z_raw") % getHistoPrefix()).c_str(), "hvtx_z_raw", 201, -100.5, 100.5);
-  h_vtx_z_raw->SetDirectory(nullptr);
-  hm->registerHisto(h_vtx_z_raw);
+    h_ohcal_e_chi2 = LogYHist2D(boost::str(boost::format("%sohcal_e_chi2") % getHistoPrefix()).c_str(), "", 270, -2, 25, 1000, 0.5, 4e8);
+    h_ohcal_e_chi2->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcal_e_chi2);
 
-  h_vtx_z_cut = new TH1D(boost::str(boost::format("%svtx_z_cut") % getHistoPrefix()).c_str(), "hvtx_z_cut", 201, -100.5, 100.5);
-  h_vtx_z_cut->SetDirectory(nullptr);
-  hm->registerHisto(h_vtx_z_cut);
+    h_cemc_etaphi_time = new TProfile2D(boost::str(boost::format("%scemc_etaphi_time") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, -10, 10);
+    h_cemc_etaphi_time->SetDirectory(nullptr);
+    hm->registerHisto(h_cemc_etaphi_time);
 
-  // raw timing information
-  h_emcaltime_cut = new TH1D(boost::str(boost::format("%semcaltime_cut") % getHistoPrefix()).c_str(), "hemcaltime_cut", 50, -17.5, 32.5);
-  h_emcaltime_cut->SetDirectory(nullptr);
-  hm->registerHisto(h_emcaltime_cut);
+    h_cemc_etaphi_time_raw = new TProfile2D(boost::str(boost::format("%scemc_etaphi_time_raw") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, -10, 10);
+    h_cemc_etaphi_time_raw->SetDirectory(nullptr);
+    hm->registerHisto(h_cemc_etaphi_time_raw);
 
-  h_ihcaltime_cut = new TH1D(boost::str(boost::format("%sihcaltime_cut") % getHistoPrefix()).c_str(), "hihcaltime_cut", 50, -17.5, 32.5);
-  h_ihcaltime_cut->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcaltime_cut);
+    h_ihcal_etaphi_time = new TProfile2D(boost::str(boost::format("%sihcal_etaphi_time") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
+    h_ihcal_etaphi_time->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcal_etaphi_time);
 
-  h_ohcaltime_cut = new TH1D(boost::str(boost::format("%sohcaltime_cut") % getHistoPrefix()).c_str(), "hohcaltime_cut", 50, -17.5, 32.5);
-  h_ohcaltime_cut->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcaltime_cut);
+    h_ihcal_etaphi_time_raw = new TProfile2D(boost::str(boost::format("%sihcal_etaphi_time_raw") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
+    h_ihcal_etaphi_time_raw->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcal_etaphi_time_raw);
 
-  // extracted timing information
-  h_emcaltime = new TH1D(boost::str(boost::format("%semcaltime") % getHistoPrefix()).c_str(), "hemcaltime", 50, -17.5, 32.5);
-  h_emcaltime->SetDirectory(nullptr);
-  hm->registerHisto(h_emcaltime);
+    h_ohcal_etaphi_time = new TProfile2D(boost::str(boost::format("%sohcal_etaphi_time") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
+    h_ohcal_etaphi_time->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcal_etaphi_time);
 
-  h_ihcaltime = new TH1D(boost::str(boost::format("%sihcaltime") % getHistoPrefix()).c_str(), "hihcaltime", 50, -17.5, 32.5);
-  h_ihcaltime->SetDirectory(nullptr);
-  hm->registerHisto(h_ihcaltime);
+    h_ohcal_etaphi_time_raw = new TProfile2D(boost::str(boost::format("%sohcal_etaphi_time_raw") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
+    h_ohcal_etaphi_time_raw->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcal_etaphi_time_raw);
 
-  h_ohcaltime = new TH1D(boost::str(boost::format("%sohcaltime") % getHistoPrefix()).c_str(), "hohcaltime", 50, -17.5, 32.5);
-  h_ohcaltime->SetDirectory(nullptr);
-  hm->registerHisto(h_ohcaltime);
+    h_cemc_etaphi_fracHitADC = new TProfile2D(boost::str(boost::format("%scemc_etaphi_fracHitADC") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, -10, 10);
+    h_cemc_etaphi_fracHitADC->SetDirectory(nullptr);
+    hm->registerHisto(h_cemc_etaphi_fracHitADC);
 
-  h_emcal_tower_e = new TH1F(boost::str(boost::format("%semcal_tower_e") % getHistoPrefix()).c_str(), "emcal_tower_e", 5000, -0.1, 1);
-  h_emcal_tower_e->SetDirectory(nullptr);
-  hm->registerHisto(h_emcal_tower_e);
+    h_cemc_etaphi_fracHit = new TProfile2D(boost::str(boost::format("%scemc_etaphi_fracHit") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, -10, 10);
+    h_cemc_etaphi_fracHit->SetDirectory(nullptr);
+    hm->registerHisto(h_cemc_etaphi_fracHit);
 
-  // cluster QA
-  h_etaphi_clus = new TH2F(boost::str(boost::format("%setaphi_clus") % getHistoPrefix()).c_str(), "", 140, -1.2, 1.2, 64, -1 * M_PI, M_PI);
-  h_etaphi_clus->SetDirectory(nullptr);
-  hm->registerHisto(h_etaphi_clus);
+    h_ihcal_etaphi_fracHitADC = new TProfile2D(boost::str(boost::format("%sihcal_etaphi_fracHitADC") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
+    h_ihcal_etaphi_fracHitADC->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcal_etaphi_fracHitADC);
 
-  h_clusE = new TH1F(boost::str(boost::format("%sclusE") % getHistoPrefix()).c_str(), "", 100, 0, 10);
-  h_clusE->SetDirectory(nullptr);
-  hm->registerHisto(h_clusE);
+    h_ohcal_etaphi_fracHitADC = new TProfile2D(boost::str(boost::format("%sohcal_etaphi_fracHitADC") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
+    h_ohcal_etaphi_fracHitADC->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcal_etaphi_fracHitADC);
 
-  h_triggerVec = new TH1F(boost::str(boost::format("%striggerVec") % getHistoPrefix()).c_str(), "", 64, 0, 64);
-  h_triggerVec->SetDirectory(nullptr);
-  hm->registerHisto(h_triggerVec);
+    h_cemc_etaphi_pedRMS = new TProfile2D(boost::str(boost::format("%scemc_etaphi_pedRMS") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, 0, 1000);
+    h_cemc_etaphi_pedRMS->SetDirectory(nullptr);
+    hm->registerHisto(h_cemc_etaphi_pedRMS);
 
-  //---------EMCal--------//
-  {
+    h_ohcal_etaphi_pedRMS = new TProfile2D(boost::str(boost::format("%sohcal_etaphi_pedRMS") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, 0, 1000);
+    h_ohcal_etaphi_pedRMS->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcal_etaphi_pedRMS);
+
+    h_ihcal_etaphi_pedRMS = new TProfile2D(boost::str(boost::format("%sihcal_etaphi_pedRMS") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, 0, 1000);
+    h_ihcal_etaphi_pedRMS->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcal_etaphi_pedRMS);
+
+    h_cemc_etaphi_ZSpedRMS = new TProfile2D(boost::str(boost::format("%scemc_etaphi_ZSpedRMS") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, 0, 1000);
+    h_cemc_etaphi_ZSpedRMS->SetDirectory(nullptr);
+    hm->registerHisto(h_cemc_etaphi_ZSpedRMS);
+
+    h_ohcal_etaphi_ZSpedRMS = new TProfile2D(boost::str(boost::format("%sohcal_etaphi_ZSpedRMS") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, 0, 1000);
+    h_ohcal_etaphi_ZSpedRMS->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcal_etaphi_ZSpedRMS);
+
+    h_ihcal_etaphi_ZSpedRMS = new TProfile2D(boost::str(boost::format("%sihcal_etaphi_ZSpedRMS") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, 0, 1000);
+    h_ihcal_etaphi_ZSpedRMS->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcal_etaphi_ZSpedRMS);
+
+    h_cemc_etaphi_badChi2 = new TProfile2D(boost::str(boost::format("%scemc_etaphi_badChi2") % getHistoPrefix()).c_str(), ";eta;phi", 96, 0, 96, 256, 0, 256, -10, 10);
+    h_cemc_etaphi_badChi2->SetDirectory(nullptr);
+    hm->registerHisto(h_cemc_etaphi_badChi2);
+
+    h_ihcal_etaphi_badChi2 = new TProfile2D(boost::str(boost::format("%sihcal_etaphi_badChi2") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
+    h_ihcal_etaphi_badChi2->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcal_etaphi_badChi2);
+
+    h_ohcal_etaphi_badChi2 = new TProfile2D(boost::str(boost::format("%sohcal_etaphi_badChi2") % getHistoPrefix()).c_str(), ";eta;phi", 24, 0, 24, 64, 0, 64, -10, 10);
+    h_ohcal_etaphi_badChi2->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcal_etaphi_badChi2);
+
+    // 1D distributions
+    h_InvMass = new TH1F(boost::str(boost::format("%sInvMass") % getHistoPrefix()).c_str(), "Invariant Mass", 120, 0, 1.2);
+    h_InvMass->SetDirectory(nullptr);
+    hm->registerHisto(h_InvMass);
+
+    // for (int channel = 0; channel < 128*192; channel++) {
+    h_channel_pedestal_0 = new TH1F(boost::str(boost::format("%schannel_pedestal_0") % getHistoPrefix()).c_str(), "Test Pedestal", 1000, -500., 500.);
+    h_channel_pedestal_0->SetDirectory(nullptr);
+    hm->registerHisto(h_channel_pedestal_0);
+
+    // vertex distributions
+    h_vtx_z_raw = new TH1D(boost::str(boost::format("%svtx_z_raw") % getHistoPrefix()).c_str(), "hvtx_z_raw", 201, -100.5, 100.5);
+    h_vtx_z_raw->SetDirectory(nullptr);
+    hm->registerHisto(h_vtx_z_raw);
+
+    h_vtx_z_cut = new TH1D(boost::str(boost::format("%svtx_z_cut") % getHistoPrefix()).c_str(), "hvtx_z_cut", 201, -100.5, 100.5);
+    h_vtx_z_cut->SetDirectory(nullptr);
+    hm->registerHisto(h_vtx_z_cut);
+
+    // raw timing information
+    h_emcaltime_cut = new TH1D(boost::str(boost::format("%semcaltime_cut") % getHistoPrefix()).c_str(), "hemcaltime_cut", 50, -17.5, 32.5);
+    h_emcaltime_cut->SetDirectory(nullptr);
+    hm->registerHisto(h_emcaltime_cut);
+
+    h_ihcaltime_cut = new TH1D(boost::str(boost::format("%sihcaltime_cut") % getHistoPrefix()).c_str(), "hihcaltime_cut", 50, -17.5, 32.5);
+    h_ihcaltime_cut->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcaltime_cut);
+
+    h_ohcaltime_cut = new TH1D(boost::str(boost::format("%sohcaltime_cut") % getHistoPrefix()).c_str(), "hohcaltime_cut", 50, -17.5, 32.5);
+    h_ohcaltime_cut->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcaltime_cut);
+
+    // extracted timing information
+    h_emcaltime = new TH1D(boost::str(boost::format("%semcaltime") % getHistoPrefix()).c_str(), "hemcaltime", 50, -17.5, 32.5);
+    h_emcaltime->SetDirectory(nullptr);
+    hm->registerHisto(h_emcaltime);
+
+    h_ihcaltime = new TH1D(boost::str(boost::format("%sihcaltime") % getHistoPrefix()).c_str(), "hihcaltime", 50, -17.5, 32.5);
+    h_ihcaltime->SetDirectory(nullptr);
+    hm->registerHisto(h_ihcaltime);
+
+    h_ohcaltime = new TH1D(boost::str(boost::format("%sohcaltime") % getHistoPrefix()).c_str(), "hohcaltime", 50, -17.5, 32.5);
+    h_ohcaltime->SetDirectory(nullptr);
+    hm->registerHisto(h_ohcaltime);
+
+    h_emcal_tower_e = new TH1F(boost::str(boost::format("%semcal_tower_e") % getHistoPrefix()).c_str(), "emcal_tower_e", 5000, -0.1, 1);
+    h_emcal_tower_e->SetDirectory(nullptr);
+    hm->registerHisto(h_emcal_tower_e);
+
+    // cluster QA
+    h_etaphi_clus = new TH2F(boost::str(boost::format("%setaphi_clus") % getHistoPrefix()).c_str(), "", 140, -1.2, 1.2, 64, -1 * M_PI, M_PI);
+    h_etaphi_clus->SetDirectory(nullptr);
+    hm->registerHisto(h_etaphi_clus);
+
+    h_clusE = new TH1F(boost::str(boost::format("%sclusE") % getHistoPrefix()).c_str(), "", 100, 0, 10);
+    h_clusE->SetDirectory(nullptr);
+    hm->registerHisto(h_clusE);
+
+    h_triggerVec = new TH1F(boost::str(boost::format("%striggerVec") % getHistoPrefix()).c_str(), "", 64, 0, 64);
+    h_triggerVec->SetDirectory(nullptr);
+    hm->registerHisto(h_triggerVec);
+
+    std::cout << "[DEBUG] Creating EMCal channel histos (128*192)..." << std::endl;
+    {
     int size = 128 * 192;
     for (int channel = 0; channel < size; channel++)
     {
-      std::string hname = (boost::format("h_cemc_channel_pedestal_%d") % channel).str();
-      h_cemc_channel_pedestal[channel] = new TH1F(hname.c_str(), hname.c_str(), 2000, -0.5, 2000.5);
-      h_cemc_channel_pedestal[channel]->SetDirectory(nullptr);
+        // Optionally print every 10k channels
+        if (channel % 5000 == 0)
+        {
+            std::cout << "[DEBUG] EMCal channel " << channel
+                << " / " << size << std::endl;
+        }
 
-      std::string hnameE = (boost::format("h_cemc_channel_energy_%d") % channel).str();
-      h_cemc_channel_energy[channel] = new TH1F(hnameE.c_str(), hnameE.c_str(), 1000, -50, 50);
-      h_cemc_channel_energy[channel]->SetDirectory(nullptr);
+        std::string hname = (boost::format("h_cemc_channel_pedestal_%d") % channel).str();
+        h_cemc_channel_pedestal[channel] = new TH1F(
+                                                hname.c_str(), hname.c_str(), 2000, -0.5, 2000.5);
+        h_cemc_channel_pedestal[channel]->SetDirectory(nullptr);
+
+        std::string hnameE = (boost::format("h_cemc_channel_energy_%d") % channel).str();
+        h_cemc_channel_energy[channel] = new TH1F(
+        hnameE.c_str(), hnameE.c_str(), 1000, -50, 50);
+        h_cemc_channel_energy[channel]->SetDirectory(nullptr);
+        }
+        std::cout << "[DEBUG] Finished EMCal channel loop.\n";
     }
-  }
-  //--------OHCal--------//
-  {
+
+    // Then the same for OHCal channels
+    std::cout << "[DEBUG] Creating OHCal channel histos (32*48)..." << std::endl;
+    {
     int size = 32 * 48;
     for (int channel = 0; channel < size; channel++)
     {
-      std::string hname = (boost::format("h_ohcal_channel_pedestal_%d") % channel).str();
-      h_ohcal_channel_pedestal[channel] = new TH1F(hname.c_str(), hname.c_str(), 2000, -0.5, 2000.5);
-      h_ohcal_channel_pedestal[channel]->SetDirectory(nullptr);
+        if (channel % 500 == 0)
+        {
+            std::cout << "[DEBUG] OHCal channel " << channel
+                << " / " << size << std::endl;
+        }
 
-      std::string hnameE = (boost::format("h_ohcal_channel_energy_%d") % channel).str();
-      h_ohcal_channel_energy[channel] = new TH1F(hnameE.c_str(), hnameE.c_str(), 1000, -50, 50);
-      h_ohcal_channel_energy[channel]->SetDirectory(nullptr);
+        std::string hname = (boost::format("h_ohcal_channel_pedestal_%d") % channel).str();
+        h_ohcal_channel_pedestal[channel] = new TH1F(
+                                                     hname.c_str(), hname.c_str(), 2000, -0.5, 2000.5);
+        h_ohcal_channel_pedestal[channel]->SetDirectory(nullptr);
+
+        std::string hnameE = (boost::format("h_ohcal_channel_energy_%d") % channel).str();
+        h_ohcal_channel_energy[channel] = new TH1F(
+                                                   hnameE.c_str(), hnameE.c_str(), 1000, -50, 50);
+        h_ohcal_channel_energy[channel]->SetDirectory(nullptr);
+        }
+        std::cout << "[DEBUG] Finished OHCal channel loop.\n";
     }
-  }
-  //--------IHCal-------//
-  {
+
+    // Then IHCal channels
+    std::cout << "[DEBUG] Creating IHCal channel histos (32*48)..." << std::endl;
+    {
     int size = 32 * 48;
     for (int channel = 0; channel < size; channel++)
     {
-      std::string hname = (boost::format("h_ihcal_channel_pedestal_%d") % channel).str();
-      h_ihcal_channel_pedestal[channel] = new TH1F(hname.c_str(), hname.c_str(), 2000, -0.5, 2000.5);
-      h_ihcal_channel_pedestal[channel]->SetDirectory(nullptr);
+        if (channel % 500 == 0)
+        {
+            std::cout << "[DEBUG] IHCal channel " << channel
+                << " / " << size << std::endl;
+        }
 
-      std::string hnameE = (boost::format("h_ihcal_channel_energy_%d") % channel).str();
-      h_ihcal_channel_energy[channel] = new TH1F(hnameE.c_str(), hnameE.c_str(), 1000, -50, 50);
-      h_ihcal_channel_energy[channel]->SetDirectory(nullptr);
+        std::string hname = (boost::format("h_ihcal_channel_pedestal_%d") % channel).str();
+        h_ihcal_channel_pedestal[channel] = new TH1F(
+                                                     hname.c_str(), hname.c_str(), 2000, -0.5, 2000.5);
+        h_ihcal_channel_pedestal[channel]->SetDirectory(nullptr);
+
+        std::string hnameE = (boost::format("h_ihcal_channel_energy_%d") % channel).str();
+        h_ihcal_channel_energy[channel] = new TH1F(
+                                                   hnameE.c_str(), hnameE.c_str(), 1000, -50, 50);
+        h_ihcal_channel_energy[channel]->SetDirectory(nullptr);
+        }
+        std::cout << "[DEBUG] Finished IHCal channel loop.\n";
     }
-  }
 
-  // Trigger QA
-  h_triggerVec = new TH1F("h_CaloValid_triggerVec", "", 64, 0, 64);
-  pr_ldClus_trig =
-      new TProfile("pr_CaloValid_ldClus_trig", "", 64, 0, 64, 0, 10);
-  for (int i = 0; i < 64; i++)
-  {
-    if (!(std::find(trigOfInterest.begin(), trigOfInterest.end(), i) != trigOfInterest.end()))
+    // Create the h_pi0_trigIB_mass once
+    std::cout << "[DEBUG] Creating h_pi0_trigIB_mass TH3F (for pi0)..." << std::endl;
+    h_pi0_trigIB_mass = new TH3F(
+    "h_pi0_trigIB_mass",
+    ";Trigger Bit; iIB (eta*32 + phi); #pi^{0} Mass (GeV/c^{2})",
+    64, -0.5, 63.5,    // triggers
+    384, -0.5, 383.5,  // IB index
+    120, 0.0, 1.2      // mass range
+    );
+    h_pi0_trigIB_mass->SetDirectory(nullptr);
+    std::cout << "[DEBUG] Attempting to register h_pi0_trigIB_mass..." << std::endl;
+    hm->registerHisto(h_pi0_trigIB_mass);
+    std::cout << "[DEBUG] Finished registering h_pi0_trigIB_mass.\n";
+
+
+    // Trigger QA
+    /*
+    commented out below line to fix memory issue due to previous initlaization with same name
+    */
+    //    h_triggerVec = new TH1F("h_CaloValid_triggerVec", "", 64, 0, 64);
+    pr_ldClus_trig =
+    new TProfile("pr_CaloValid_ldClus_trig", "", 64, 0, 64, 0, 10);
+    for (int i = 0; i < 64; i++)
     {
-      continue;
-    }
-    h_edist[i] = new TH2F(
-        boost::str(boost::format("h_CaloValid_edist_trig%d") % i).c_str(), "",
-        64, -1.2, 1.2, 128, -3.1415, 3.1415);
-    h_ldClus_trig[i] = new TH1F(
-        boost::str(boost::format("h_CaloValid_ldClus_trig%d") % i).c_str(), "",
-        18, 1, 10);
-    pr_evtNum_ldClus_trig[i] = new TProfile(
-        boost::str(boost::format("pr_CaloValid_evtNum_ldClus_trig%d") % i)
-            .c_str(),
-        "", 100000, 0, 100000, 0, 10);
-    pr_rejection[i] = new TProfile(
-        boost::str(boost::format("pr_CaloValid_rejection_trig%d") % i).c_str(),
-        "", 100000, 0, 100000, 0, 50000);
-    pr_livetime[i] = new TProfile(
-        boost::str(boost::format("pr_CaloValid_livetime_trig%d") % i).c_str(),
-        "", 100000, 0, 100000, 0, 10);
+        if (!(std::find(trigOfInterest.begin(), trigOfInterest.end(), i) != trigOfInterest.end()))
+        {
+            continue;
+        }
+        h_edist[i] = new TH2F(
+                              boost::str(boost::format("h_CaloValid_edist_trig%d") % i).c_str(), "",
+                              64, -1.2, 1.2, 128, -3.1415, 3.1415);
+        h_ldClus_trig[i] = new TH1F(
+                                    boost::str(boost::format("h_CaloValid_ldClus_trig%d") % i).c_str(), "",
+                                    18, 1, 10);
+        pr_evtNum_ldClus_trig[i] = new TProfile(
+                                                boost::str(boost::format("pr_CaloValid_evtNum_ldClus_trig%d") % i)
+                                                .c_str(),
+                                                "", 100000, 0, 100000, 0, 10);
+        pr_rejection[i] = new TProfile(
+                                       boost::str(boost::format("pr_CaloValid_rejection_trig%d") % i).c_str(),
+                                       "", 100000, 0, 100000, 0, 50000);
+        pr_livetime[i] = new TProfile(
+                                      boost::str(boost::format("pr_CaloValid_livetime_trig%d") % i).c_str(),
+                                      "", 100000, 0, 100000, 0, 10);
 
-    hm->registerHisto(h_edist[i]);
-    hm->registerHisto(h_ldClus_trig[i]);
-    hm->registerHisto(pr_evtNum_ldClus_trig[i]);
-    hm->registerHisto(pr_rejection[i]);
-    hm->registerHisto(pr_livetime[i]);
-  }
-  hm->registerHisto(h_triggerVec);
-  hm->registerHisto(pr_ldClus_trig);
+        hm->registerHisto(h_edist[i]);
+        hm->registerHisto(h_ldClus_trig[i]);
+        hm->registerHisto(pr_evtNum_ldClus_trig[i]);
+        hm->registerHisto(pr_rejection[i]);
+        hm->registerHisto(pr_livetime[i]);
+    }
+    hm->registerHisto(h_triggerVec);
+    hm->registerHisto(pr_ldClus_trig);
 }
+
