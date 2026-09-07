@@ -27,25 +27,12 @@ libTpcConditions_la_LIBADD = \
   -lSubsysReco
 
 libTpcConditions_la_SOURCES = \
-  TpcConditions.cc \
-  TpcConditionsReco.cc \
-  TpcConditions_Dict.cc
-
-TpcConditions_Dict.cc: TpcConditions.h TpcConditionsReco.h TpcConditionsLinkDef.h
-	rootcling -f $@ -c $(AM_CPPFLAGS) \
-	  $(srcdir)/TpcConditions.h \
-	  $(srcdir)/TpcConditionsReco.h \
-	  $(srcdir)/TpcConditionsLinkDef.h
+  TpcConditionsReco.cc
 
 ################################################
 
 BUILT_SOURCES = \
-  TpcConditions_Dict.cc \
   testexternals.cc
-
-CLEANFILES = \
-  TpcConditions_Dict.cc \
-  TpcConditions_Dict_rdict.pcm
 
 noinst_PROGRAMS = \
   testexternals

@@ -4,21 +4,20 @@
 #include <ffamodules/CDBInterface.h>
 
 #include <cdbobjects/CDBTTree.h>
-#include <algorithm>
+
+#include <ffarawobjects/Gl1Packet.h>
 
 #include <fun4all/Fun4AllReturnCodes.h>
 
 #include <phool/PHCompositeNode.h>
 #include <phool/PHDataNode.h>
 #include <phool/PHNodeIterator.h>
-#include <phool/PHObject.h>
 #include <phool/getClass.h>
 
-#include <ffarawobjects/Gl1Packet.h>
-
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
-
 #include <string>
 #include <vector>
 
@@ -27,53 +26,48 @@
 namespace
 {
   const std::vector<std::string> SR1 = {
-    "S_01_R1_G4_IMon",
-    "S_04_R1_G4_IMon",
-    "S_05_R1_G4_IMon",
-    "S_10_R1_G4_IMon"
-  };
-  
+      "S_01_R1_G4_IMon",
+      "S_04_R1_G4_IMon",
+      "S_05_R1_G4_IMon",
+      "S_10_R1_G4_IMon"};
+
   const std::vector<std::string> SR2 = {
-    "S_01_R2_G4_IMon",
-    "S_02_R2_G4_IMon",
-    "S_07_R2_G4_IMon",
-    "S_09_R2_G4_IMon",
-    "S_10_R2_G4_IMon",
-    "S_12_R2_G4_IMon"
-  };
-  
+      "S_01_R2_G4_IMon",
+      "S_02_R2_G4_IMon",
+      "S_07_R2_G4_IMon",
+      "S_09_R2_G4_IMon",
+      "S_10_R2_G4_IMon",
+      "S_12_R2_G4_IMon"};
+
   const std::vector<std::string> SR3 = {
-    "S_08_R3_G4_IMon",
-    "S_09_R3_G4_IMon",
-    "S_10_R3_G4_IMon",
+      "S_08_R3_G4_IMon",
+      "S_09_R3_G4_IMon",
+      "S_10_R3_G4_IMon",
   };
-  
+
   const std::vector<std::string> NR1 = {
-    "N_03_R1_G4_IMon",
-    "N_04_R1_G4_IMon",
-    "N_06_R1_G4_IMon",
-    "N_07_R1_G4_IMon",
-    "N_08_R1_G4_IMon",
-    "N_10_R1_G4_IMon",
-    "N_11_R1_G4_IMon",
-    "N_12_R1_G4_IMon"
-  };
-  
+      "N_03_R1_G4_IMon",
+      "N_04_R1_G4_IMon",
+      "N_06_R1_G4_IMon",
+      "N_07_R1_G4_IMon",
+      "N_08_R1_G4_IMon",
+      "N_10_R1_G4_IMon",
+      "N_11_R1_G4_IMon",
+      "N_12_R1_G4_IMon"};
+
   const std::vector<std::string> NR2 = {
-    "N_02_R2_G4_IMon",
-    "N_04_R2_G4_IMon",
-    "N_05_R2_G4_IMon",
-    "N_09_R2_G4_IMon",
-    "N_10_R2_G4_IMon",
-    "N_11_R2_G4_IMon",
-    "N_12_R2_G4_IMon"
-  };
-  
+      "N_02_R2_G4_IMon",
+      "N_04_R2_G4_IMon",
+      "N_05_R2_G4_IMon",
+      "N_09_R2_G4_IMon",
+      "N_10_R2_G4_IMon",
+      "N_11_R2_G4_IMon",
+      "N_12_R2_G4_IMon"};
+
   const std::vector<std::string> NR3 = {
-    "N_02_R3_G4_IMon",
-    "N_10_R3_G4_IMon"
-  };
-  
+      "N_02_R3_G4_IMon",
+      "N_10_R3_G4_IMon"};
+
   const std::vector<std::string> SOUTH = []()
   {
     std::vector<std::string> v;
@@ -82,7 +76,7 @@ namespace
     v.insert(v.end(), SR3.begin(), SR3.end());
     return v;
   }();
-  
+
   const std::vector<std::string> NORTH = []()
   {
     std::vector<std::string> v;
@@ -91,7 +85,7 @@ namespace
     v.insert(v.end(), NR3.begin(), NR3.end());
     return v;
   }();
-  
+
   const std::vector<std::string> ALL = []()
   {
     std::vector<std::string> v;
@@ -99,7 +93,7 @@ namespace
     v.insert(v.end(), NORTH.begin(), NORTH.end());
     return v;
   }();
-}
+}  // namespace
 
 TpcConditionsReco::TpcConditionsReco(const std::string &name)
   : SubsysReco(name)
@@ -117,8 +111,7 @@ int TpcConditionsReco::InitRun(PHCompositeNode *topNode)
             << std::endl;
 
   // Get the TPC conditions payload from CDB
-  m_cdb = CDBInterface::instance();
-  std::string calibdir = m_cdb->getUrl("TPC_CONDITIONS");
+  std::string calibdir = CDBInterface::instance()->getUrl("TPC_CONDITIONS");
   m_tree = new CDBTTree(calibdir);
   m_tree->LoadCalibrations();
 
@@ -134,32 +127,26 @@ int TpcConditionsReco::InitRun(PHCompositeNode *topNode)
 
   // Find/create RUN node
   PHNodeIterator iter(topNode);
-  PHCompositeNode *runNode =
-      dynamic_cast<PHCompositeNode *>(
-          iter.findFirst("PHCompositeNode", "RUN"));
+  PHCompositeNode *parNode = dynamic_cast<PHCompositeNode *>(iter.findFirst("PHCompositeNode", "PAR"));
 
-  if (!runNode)
+  if (!parNode)
   {
-    runNode = new PHCompositeNode("RUN");
-    topNode->addNode(runNode);
+    parNode = new PHCompositeNode("PAR");
+    topNode->addNode(parNode);
   }
 
   // Create the transient TPC conditions object
   m_conditions = new TpcConditions();
-  PHDataNode<PHObject> *conditionsNode =
-      new PHDataNode<PHObject>(
-          m_conditions, "TpcConditions", "PHObject");
-  runNode->addNode(conditionsNode);
+  PHDataNode<TpcConditions> *conditionsNode = new PHDataNode<TpcConditions>(m_conditions, "TpcConditions", "PHObject");
+  parNode->addNode(conditionsNode);
 
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
-
 int TpcConditionsReco::process_event(PHCompositeNode *topNode)
 {
   // Get the current event BCO
-  Gl1Packet *gl1 =
-      findNode::getClass<Gl1Packet>(topNode, "GL1RAWHIT");
+  Gl1Packet *gl1 = findNode::getClass<Gl1Packet>(topNode, "GL1RAWHIT");
   if (!gl1)
   {
     std::cout << "TpcConditionsReco::process_event - "
@@ -182,23 +169,23 @@ int TpcConditionsReco::process_event(PHCompositeNode *topNode)
 
   --iter;
   int channel = iter->second;
-  
+
   // Fill current-event conditions
   m_conditions->set_Temperature(m_tree->GetFloatValue(channel, "gas_temperature"));
-  m_conditions->set_Pressure   (m_tree->GetFloatValue(channel, "gas_pressure"));
-  m_conditions->set_FieldOK    (m_tree->GetFloatValue(channel, "FieldOK") != 0.0);
-  m_conditions->set_GainOK     (m_tree->GetFloatValue(channel, "GainOK") != 0.0);
+  m_conditions->set_Pressure(m_tree->GetFloatValue(channel, "gas_pressure"));
+  m_conditions->set_FieldOK(m_tree->GetFloatValue(channel, "FieldOK") != 0.0);
+  m_conditions->set_GainOK(m_tree->GetFloatValue(channel, "GainOK") != 0.0);
 
   // Here are the critical LoadCurrent calculations.
   m_conditions->set_LoadCurrent(get_MedianCurrent(channel, ALL));
-  m_conditions->set_LoadNorth  (get_MedianCurrent(channel, NORTH));
-  m_conditions->set_LoadSouth  (get_MedianCurrent(channel, SOUTH));
-  m_conditions->set_LoadSR1    (get_MedianCurrent(channel, SR1));
-  m_conditions->set_LoadSR2    (get_MedianCurrent(channel, SR2));
-  m_conditions->set_LoadSR3    (get_MedianCurrent(channel, SR3));
-  m_conditions->set_LoadNR1    (get_MedianCurrent(channel, NR1));
-  m_conditions->set_LoadNR2    (get_MedianCurrent(channel, NR2));
-  m_conditions->set_LoadNR3    (get_MedianCurrent(channel, NR3));
+  m_conditions->set_LoadNorth(get_MedianCurrent(channel, NORTH));
+  m_conditions->set_LoadSouth(get_MedianCurrent(channel, SOUTH));
+  m_conditions->set_LoadSR1(get_MedianCurrent(channel, SR1));
+  m_conditions->set_LoadSR2(get_MedianCurrent(channel, SR2));
+  m_conditions->set_LoadSR3(get_MedianCurrent(channel, SR3));
+  m_conditions->set_LoadNR1(get_MedianCurrent(channel, NR1));
+  m_conditions->set_LoadNR2(get_MedianCurrent(channel, NR2));
+  m_conditions->set_LoadNR3(get_MedianCurrent(channel, NR3));
 
   // Do or die
   if (!m_conditions->get_FieldOK() ||
@@ -219,8 +206,7 @@ float TpcConditionsReco::get_MedianCurrent(
 
   for (const auto &name : channels)
   {
-    currents.push_back(
-        m_tree->GetFloatValue(channel, name));
+    currents.push_back(m_tree->GetFloatValue(channel, name));
   }
 
   std::sort(currents.begin(), currents.end());
@@ -232,6 +218,5 @@ float TpcConditionsReco::get_MedianCurrent(
     return currents[n / 2];
   }
 
-  return 0.5F *
-         (currents[n / 2 - 1] + currents[n / 2]);
+  return 0.5F * (currents[n / 2 - 1] + currents[n / 2]);
 }

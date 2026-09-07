@@ -10,7 +10,6 @@
 
 class PHCompositeNode;
 
-class CDBInterface;
 class CDBTTree;
 class TpcConditions;
 
@@ -24,7 +23,6 @@ class TpcConditionsReco : public SubsysReco
   int process_event(PHCompositeNode *topNode) override;
 
  private:
-  CDBInterface *m_cdb{nullptr};
   CDBTTree *m_tree{nullptr};
   TpcConditions *m_conditions{nullptr};
   float get_MedianCurrent(int channel, const std::vector<std::string> &channels);
