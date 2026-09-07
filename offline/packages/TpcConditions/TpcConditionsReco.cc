@@ -137,7 +137,7 @@ int TpcConditionsReco::InitRun(PHCompositeNode *topNode)
 
   // Create the transient TPC conditions object
   m_conditions = new TpcConditions();
-  PHDataNode<TpcConditions> *conditionsNode = new PHDataNode<TpcConditions>(m_conditions, "TpcConditions", "PHObject");
+  PHDataNode<TpcConditions> *conditionsNode = new PHDataNode<TpcConditions>(m_conditions, "TpcConditions", "Data");
   parNode->addNode(conditionsNode);
 
   return Fun4AllReturnCodes::EVENT_OK;
